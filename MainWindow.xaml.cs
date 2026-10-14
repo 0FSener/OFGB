@@ -18,11 +18,20 @@ namespace OFGB
         internal static partial int DwmSetWindowAttribute(IntPtr hwnd, int attr, [In] int[] attrValue, int attrSize);
 
         const string cur_ver = "Software\\Microsoft\\Windows\\CurrentVersion\\";
+        private bool _isInitializing;
 
         public MainWindow()
         {
-            InitializeComponent();
-            InitializeKeys();
+            _isInitializing = true;
+            try
+            {
+                InitializeComponent();
+                InitializeKeys();
+            }
+            finally
+            {
+                _isInitializing = false;
+            }
 
             DwmSetWindowAttribute(new WindowInteropHelper(Application.Current.MainWindow).EnsureHandle(), 33, [2], sizeof(int));
         }
@@ -72,49 +81,76 @@ namespace OFGB
             bool key13 = CreateKey(cur_ver + "Notifications\\Settings\\Windows.ActionCenter.SmartOptOut", "Enabled");
             cb10.IsChecked = !key13;
 
-            // These Need To Be Run As Administrator
-            if (IsRunningAsAdministrator())
-            {
-                // Show Bing Results in Windows Search (Inverted, 1 == Disabled)
-                bool key14 = CreateKey("Software\\Policies\\Microsoft\\Windows\\Explorer", "DisableSearchBoxSuggestions");
-                bool key15 = CreateKey(cur_ver + "Search", "BingSearchEnabled");
-                cb11.IsChecked = key14 && !key15;
+            // Disable Search Highlights in search box
+            bool key17 = CreateKey(cur_ver + "SearchSettings", "IsDynamicSearchBoxEnabled");
+            cb13.IsChecked = !key17;
 
-                // Disable Edge desktop search widget bar
-                bool key16 = CreateKey("Software\\Policies\\Microsoft\\Edge", "WebWidgetAllowed");
-                cb12.IsChecked = !key16;
-            }
-            else
+            // Disable Shared Experiences ads and suggestions
+            bool key18 = CreateKey(cur_ver + "ContentDeliveryManager", "SubscribedContent-310091Enabled");
+            cb14.IsChecked = !key18;
+
+            // Disable account notifications and backup reminders in Start
+            bool key19 = CreateKey(cur_ver + "Explorer\\Advanced", "Start_AccountNotifications");
+            cb15.IsChecked = !key19;
+
+            // Disable Start Menu suggestions in Start
+            bool key20 = CreateKey(cur_ver + "ContentDeliveryManager", "SubscribedContent-338388Enabled");
+            cb16.IsChecked = !key20;
+
+            // These Need To Be Run As Administrator
+            // Show Bing Results in Windows Search (Inverted, 1 == Disabled)
+            bool key14 = CreateKey("Software\\Policies\\Microsoft\\Windows\\Explorer", "DisableSearchBoxSuggestions", false);
+            bool key15 = CreateKey(cur_ver + "Search", "BingSearchEnabled");
+            cb11.IsChecked = key14 && !key15;
+
+            // Disable Edge desktop search widget bar
+            bool key16 = CreateKey("Software\\Policies\\Microsoft\\Edge", "WebWidgetAllowed");
+            cb12.IsChecked = !key16;
+
+            // Disable Windows Copilot (Inverted, 1 == Disabled)
+            bool key21 = CreateKey("Software\\Policies\\Microsoft\\Windows\\WindowsCopilot", "TurnOffWindowsCopilot", false);
+            cb17.IsChecked = key21;
+
+            if (!IsRunningAsAdministrator())
             {
                 cb11.IsEnabled = false;
                 cb12.IsEnabled = false;
+                cb17.IsEnabled = false;
             }
         }
 
-        private static bool CreateKey(string loc, string key)
+        private static bool CreateKey(string loc, string key, bool defaultValue = true)
         {
-            RegistryKey? keyRef = Registry.CurrentUser.OpenSubKey(loc, true);
-
-            if (keyRef is null)
+            try
             {
-                keyRef = Registry.CurrentUser.CreateSubKey(loc);
-                keyRef.SetValue(key, 0);
+                using RegistryKey? keyRef = Registry.CurrentUser.OpenSubKey(loc, false);
+                if (keyRef is null)
+                {
+                    return defaultValue;
+                }
+
+                object? rawValue = keyRef.GetValue(key);
+                if (rawValue is null)
+                {
+                    return defaultValue;
+                }
+
+                if (rawValue is int intValue)
+                {
+                    return intValue != 0;
+                }
+
+                if (int.TryParse(rawValue.ToString(), out int parsedInt))
+                {
+                    return parsedInt != 0;
+                }
+
+                return Convert.ToBoolean(rawValue);
             }
-            else if (keyRef.GetValue(key) is null)
+            catch
             {
-                keyRef.SetValue(key, 0);
+                return defaultValue;
             }
-
-            if (keyRef is null)
-            {
-                MessageBox.Show("Failed to create a registry subkey during initialization!", "OFGB: Fatal Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                throw new InvalidOperationException("OFGB: Failed to create subkey during initialization!");
-            }
-
-            bool value = Convert.ToBoolean(keyRef.GetValue(key));
-            keyRef.Close();
-
-            return value;
         }
 
         private static void ToggleOptions(string checkboxName, bool enable)
@@ -161,6 +197,21 @@ namespace OFGB
                 case "cb12":
                     Registry.SetValue("HKEY_CURRENT_USER\\Software\\Policies\\Microsoft\\Edge", "WebWidgetAllowed", Convert.ToInt32(!enable));
                     break;
+                case "cb13":
+                    Registry.SetValue("HKEY_CURRENT_USER\\" + cur_ver + "SearchSettings", "IsDynamicSearchBoxEnabled", Convert.ToInt32(!enable));
+                    break;
+                case "cb14":
+                    Registry.SetValue("HKEY_CURRENT_USER\\" + cur_ver + "ContentDeliveryManager", "SubscribedContent-310091Enabled", Convert.ToInt32(!enable));
+                    break;
+                case "cb15":
+                    Registry.SetValue("HKEY_CURRENT_USER\\" + cur_ver + "Explorer\\Advanced", "Start_AccountNotifications", Convert.ToInt32(!enable));
+                    break;
+                case "cb16":
+                    Registry.SetValue("HKEY_CURRENT_USER\\" + cur_ver + "ContentDeliveryManager", "SubscribedContent-338388Enabled", Convert.ToInt32(!enable));
+                    break;
+                case "cb17":
+                    Registry.SetValue("HKEY_CURRENT_USER\\Software\\Policies\\Microsoft\\Windows\\WindowsCopilot", "TurnOffWindowsCopilot", Convert.ToInt32(enable)); // <- Inverted
+                    break;
             }
         }
 
@@ -171,11 +222,13 @@ namespace OFGB
 
         private void Checked(object sender, RoutedEventArgs e)
         {
+            if (_isInitializing) return;
             ToggleOptions(((CheckBox)sender).Name, true);
         }
 
         private void Unchecked(object sender, RoutedEventArgs e)
         {
+            if (_isInitializing) return;
             ToggleOptions(((CheckBox)sender).Name, false);
         }
 
